@@ -6,10 +6,11 @@ import joblib
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import sys 
 from sklearn.exceptions import NotFittedError
 from tensorflow.keras.callbacks import Callback, EarlyStopping, LambdaCallback
 from tensorflow.keras.layers import Dense, Input
-from tensorflow.keras.losses import BinaryCrossentropy
+from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 
@@ -113,6 +114,7 @@ class Classifier:
     def __init__(
         self,
         D: Optional[int] = None,
+        K: Optional[int] = None,
         activation: Optional[str] = "tanh",
         lr: Optional[float] = 1e-3,
         **kwargs,
@@ -122,6 +124,7 @@ class Classifier:
         Args:
             D (int, optional): Size of the input layer.
                 Defaults to None (set in `fit`).
+            K (int, optional): Size of the output layer.
             activation (str, optional): Activation function for hidden layers.
                 Options: ["relu", "tanh", "none"]
                 Defaults to "tanh".
@@ -129,6 +132,7 @@ class Classifier:
                 Defaults to 1e-3.
         """
         self.D = D
+        self.K = K
         self.activation = str(activation).strip()
         self.lr = float(lr)
         self._log_period = 10  # logging per 10 epochs
@@ -148,12 +152,12 @@ class Classifier:
         x = input_
         x = Dense(M1, activation=self.activation)(x)
         x = Dense(M2, activation=self.activation)(x)
-        x = Dense(1, activation="sigmoid")(x)
+        x = Dense(self.K)(x)
         output_ = x
         model = Model(input_, output_)
         # model.summary()
         model.compile(
-            loss=BinaryCrossentropy(),
+            loss=SparseCategoricalCrossentropy(from_logits=True),
             optimizer=Adam(learning_rate=self.lr),
             metrics=["accuracy"],
         )
@@ -174,6 +178,7 @@ class Classifier:
         """
         # get data dimensionality and build network
         self.D = train_inputs.shape[1]
+        self.K = len(set(train_targets.values))
         self.model = self.build_model()
 
         # set seed for reproducibility
@@ -210,15 +215,15 @@ class Classifier:
             ],
         )
 
-    def _predict(self, inputs: pd.DataFrame) -> np.ndarray:
+    def _predict(self, inputs: np.ndarray) -> np.ndarray:
         """Predict class probabilities for the given data.
 
         Args:
-            inputs (pandas.DataFrame): The input data.
+            inputs (np.ndarray): The input data.
         Returns:
             numpy.ndarray: The predicted class probabilities.
         """
-        return self.model.predict(inputs, verbose=False)
+        return tf.nn.softmax(self.model.predict(inputs, verbose=False))
 
     def predict(self, inputs: pd.DataFrame) -> np.ndarray:
         """Predict class labels for the given data.
@@ -228,9 +233,9 @@ class Classifier:
         Returns:
             numpy.ndarray: The predicted class labels.
         """
-        class1_probs = self._predict(inputs).reshape(-1, 1)
-        predicted_labels = (class1_probs >= 0.5).astype(int)
-        return np.squeeze(predicted_labels)
+        class_probs = self._predict(inputs.values)
+        predicted_labels = np.argmax(class_probs, axis=1)
+        return predicted_labels
 
     def predict_proba(self, inputs: pd.DataFrame) -> np.ndarray:
         """Predict class probabilities for the given data.
@@ -240,10 +245,7 @@ class Classifier:
         Returns:
             numpy.ndarray: The predicted class probabilities.
         """
-        class1_probs = self._predict(inputs).reshape(-1, 1)
-        class0_probs = 1.0 - class1_probs
-        probs = np.hstack((class0_probs, class1_probs))
-        return probs
+        return self._predict(inputs.values)
 
     def summary(self):
         """Return model summary of the Tensorflow model"""
@@ -274,6 +276,7 @@ class Classifier:
             raise NotFittedError("Model is not fitted yet.")
         model_params = {
             "D": self.D,
+            "K": self.K,
             "activation": self.activation,
             "lr": self.lr,
         }
@@ -305,6 +308,7 @@ class Classifier:
             f"Model name: {self.model_name} ("
             f"activation: {self.activation}, "
             f"D: {self.D}, "
+            f"K: {self.K}, "
             f"lr: {self.lr})"
         )
 
